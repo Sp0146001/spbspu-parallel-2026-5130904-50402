@@ -1,15 +1,13 @@
-#include "../common/montecarlo.hpp"
-
-#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <exception>
-#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
+
+#include "../common/montecarlo.hpp"
+#include "../common/shape.hpp"
 
 namespace petrov {
   namespace {
@@ -27,7 +25,7 @@ namespace petrov {
       std::size_t seed;
     };
 
-    std::size_t parseSize(const char* text)
+    std::size_t parseSize(const char* const text)
     {
       std::size_t parsed_length = 0;
       long long value = 0;
@@ -42,7 +40,7 @@ namespace petrov {
       return static_cast< std::size_t >(value);
     }
 
-    parameters_t parseParameters(int argc, const char* const* argv)
+    parameters_t parseParameters(int argc, const char* const* const argv)
     {
       if ((argc != minimal_argument_count) && (argc != maximal_argument_count)) {
         throw std::runtime_error("incorrect number of arguments");
@@ -56,45 +54,6 @@ namespace petrov {
       return {thread_count, try_count, seed};
     }
 
-    void runMonteCarlo(
-        const std::vector< circle_t >& circles, const box_t& box, std::size_t tries, std::size_t seed, hits_t& result)
-    {
-      result = countHits(circles, box, tries, seed);
-    }
-
-    hits_t countHitsInThreads(const std::vector< circle_t >& circles, const box_t& box, const parameters_t& parameters)
-    {
-      const std::size_t requested_count = (parameters.thread_count == 0) ? 1 : parameters.thread_count;
-      const std::size_t hardware_count = static_cast< std::size_t >(std::thread::hardware_concurrency());
-      const std::size_t hardware_limit = (hardware_count == 0) ? 1 : hardware_count;
-      const std::size_t worker_count = std::min(requested_count, hardware_limit);
-
-      const std::size_t tries_per_worker = parameters.try_count / worker_count;
-      const std::size_t remainder = parameters.try_count % worker_count;
-
-      std::vector< hits_t > results(worker_count);
-      std::vector< std::thread > workers;
-      workers.reserve(worker_count);
-
-      for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
-        const std::size_t worker_tries = tries_per_worker + ((worker_index < remainder) ? 1 : 0);
-        const std::size_t worker_seed = parameters.seed + worker_index;
-        workers.emplace_back(runMonteCarlo, std::cref(circles), std::cref(box), worker_tries, worker_seed,
-            std::ref(results[worker_index]));
-      }
-
-      for (std::thread& worker : workers) {
-        worker.join();
-      }
-
-      hits_t total_hits = {0, 0};
-      for (const hits_t& hits : results) {
-        total_hits.union_count += hits.union_count;
-        total_hits.intersection_count += hits.intersection_count;
-      }
-      return total_hits;
-    }
-
   }
 }
 
@@ -102,13 +61,13 @@ int main(int argc, char** argv)
 {
   try {
     const petrov::parameters_t parameters = petrov::parseParameters(argc, argv);
-    const std::vector< petrov::circle_t > circles = petrov::readCircles(std::cin);
-    const petrov::box_t box = petrov::findBoundingBox(circles);
+    const std::vector< petrov::shape_t > shapes = petrov::readShapes(std::cin);
+    const petrov::frame_t frame = petrov::findFrame(shapes);
+    const petrov::hits_t hits
+        = petrov::countHits(shapes, frame, parameters.try_count, parameters.thread_count, parameters.seed);
 
-    const petrov::hits_t hits = petrov::countHitsInThreads(circles, box, parameters);
-
-    const double covered_area = petrov::computeArea(box, hits.union_count, parameters.try_count);
-    const double intersection_area = petrov::computeArea(box, hits.intersection_count, parameters.try_count);
+    const double covered_area = petrov::computeArea(frame, hits.union_count, parameters.try_count);
+    const double intersection_area = petrov::computeArea(frame, hits.intersection_count, parameters.try_count);
     std::cout << covered_area << ' ' << intersection_area << '\n';
   } catch (const std::exception& exception) {
     std::cerr << exception.what() << '\n';
